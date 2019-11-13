@@ -2,8 +2,11 @@
 ### Kelompok: Gaskeun
 ### Petunjuk Penggunaan Program
 Buka terminal di file directory server
-Jalankan server dengan perintah 
+
+Jalankan server dengan perintah
+
 `python server3.py`
+
 Server akan dijalankan di localhost dengan port 8765
 
 ### Pembagian tugas
