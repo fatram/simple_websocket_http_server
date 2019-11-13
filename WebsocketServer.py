@@ -45,7 +45,7 @@ OPCODE_PING         = 0x9
 OPCODE_PONG         = 0xA
 
 
-# -------------------------------- API ---------------------------------
+# API
 
 class API():
 
@@ -85,27 +85,9 @@ class API():
         self._multicast_(msg)
 
 
-# ------------------------- Implementation -----------------------------
+# Implementation
 
 class WebsocketServer(ThreadingMixIn, TCPServer, API):
-    """
-	A websocket server waiting for clients to connect.
-    Args:
-        port(int): Port to bind to
-        host(str): Hostname or IP to listen for connections. By default 127.0.0.1
-            is being used. To accept connections from any client, you should use
-            0.0.0.0.
-        loglevel: Logging level from logging module to use for logging. By default
-            warnings and errors are being logged.
-    Properties:
-        clients(list): A list of connected clients. A client is a dictionary
-            like below.
-                {
-                 'id'      : id,
-                 'handler' : handler,
-                 'address' : (addr, port)
-                }
-    """
 
     allow_reuse_address = True
     daemon_threads = True  # comment to keep threads alive until finished
@@ -167,6 +149,8 @@ class WebSocketHandler(StreamRequestHandler):
         self.keep_alive = True
         self.handshake_done = False
         self.valid_client = False
+        self.fragment_opcode = 0
+        self.fragment_payload_buf = bytearray()
 
     def handle(self):
         while self.keep_alive:
@@ -176,7 +160,6 @@ class WebSocketHandler(StreamRequestHandler):
                 self.read_next_message()
 
     def read_bytes(self, num):
-        # python3 gives ordinal of byte directly
         bytes = self.rfile.read(num)
         if sys.version_info[0] < 3:
             return map(ord, bytes)
@@ -204,23 +187,8 @@ class WebSocketHandler(StreamRequestHandler):
             logger.info("Client asked to close connection.")
             self.keep_alive = 0
             return
-        if not masked:
+        if not masked and opcode != OPCODE_TEXT and opcode != OPCODE_BINARY:
             logger.warn("Client must always be masked.")
-            self.keep_alive = 0
-            return
-        if opcode == OPCODE_CONTINUATION:
-            logger.warn("Continuation frames are not supported.")
-            return
-        elif opcode == OPCODE_BINARY:
-            opcode_handler = self.server._message_received_
-        elif opcode == OPCODE_TEXT:
-            opcode_handler = self.server._message_received_
-        elif opcode == OPCODE_PING:
-            opcode_handler = self.server._ping_received_
-        elif opcode == OPCODE_PONG:
-            opcode_handler = self.server._pong_received_
-        else:
-            logger.warn("Unknown opcode %#x." % opcode)
             self.keep_alive = 0
             return
 
@@ -230,16 +198,41 @@ class WebSocketHandler(StreamRequestHandler):
             payload_length = struct.unpack(">Q", self.rfile.read(8))[0]
 
         masks = self.read_bytes(4)
-        message_bytes = bytearray()
+        payload = bytearray()
         for message_byte in self.read_bytes(payload_length):
-            message_byte ^= masks[len(message_bytes) % 4]
-            message_bytes.append(message_byte)
-        if(opcode == OPCODE_TEXT):
-            opcode_handler(self, message_bytes.decode('utf8'))
-        elif(opcode == OPCODE_BINARY):
-            opcode_handler(self, bytes(message_bytes))
-        else:
-            opcode_handler(self, message_bytes.decode('utf8'))
+            message_byte ^= masks[len(payload) % 4]
+            payload.append(message_byte)
+
+        if fin and opcode != OPCODE_CONTINUATION: # simple msg
+            if opcode == OPCODE_PING:
+                self.server._ping_received_(self, payload.decode('utf8'))
+            elif opcode == OPCODE_PONG:
+                self.server._pong_received_(self, payload.decode('utf8'))
+            elif opcode == OPCODE_TEXT:
+                self.server._message_received_(self, payload.decode('utf8'))
+            elif opcode == OPCODE_BINARY:
+                self.server._message_received_(self, bytes(payload))
+            return
+
+        # Fragment msg start
+        if not fin and opcode:
+            self.fragment_opcode = opcode
+            self.fragment_payload_buf = payload
+            return
+        
+        # "not opcode" is the same as "opcode == OPCODE_CONTINUATION"
+        if not fin and not opcode: # fragment msg ing
+            self.fragment_payload_buf.extend(payload)
+            return
+        
+        # Fragment msg end
+        if fin and opcode == OPCODE_CONTINUATION:
+            if self.fragment_opcode == OPCODE_TEXT:
+                self.server._message_received_(self, (self.fragment_payload_buf + payload).decode('utf8'))
+            elif self.fragment_opcode == OPCODE_BINARY:
+                self.server._message_received_(self, bytes(self.fragment_payload_buf + payload))
+            return
+        
 
     def send_message(self, message):
         if(isinstance(message, bytes) or isinstance(message, (bytes, bytearray))):
@@ -251,10 +244,7 @@ class WebSocketHandler(StreamRequestHandler):
         self.send_text(message, OPCODE_PONG)
 
     def send_text(self, message, opcode):
-        """
-        Important: Fragmented(=continuation) messages are not supported since
-        their usage cases are limited - when we don't know the payload length.
-        """
+        # Important: Fragmented(=continuation) messages are not supported
 
         # Validate message
         if isinstance(message, bytes):
