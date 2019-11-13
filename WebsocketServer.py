@@ -242,12 +242,15 @@ class WebSocketHandler(StreamRequestHandler):
             opcode_handler(self, message_bytes.decode('utf8'))
 
     def send_message(self, message):
-        self.send_text(message)
+        if(isinstance(message, bytes) or isinstance(message, (bytes, bytearray))):
+            self.send_text(message, OPCODE_BINARY)
+        else:
+            self.send_text(message, OPCODE_TEXT)
 
     def send_pong(self, message):
         self.send_text(message, OPCODE_PONG)
 
-    def send_text(self, message, opcode=OPCODE_TEXT):
+    def send_text(self, message, opcode):
         """
         Important: Fragmented(=continuation) messages are not supported since
         their usage cases are limited - when we don't know the payload length.
@@ -268,7 +271,7 @@ class WebSocketHandler(StreamRequestHandler):
 
         header  = bytearray()
         if(isinstance(message, bytes) or isinstance(message, (bytes, bytearray))):
-            payload = bytes(message)
+            payload = message
         else:
             payload = encode_to_UTF8(message)
         payload_length = len(payload)

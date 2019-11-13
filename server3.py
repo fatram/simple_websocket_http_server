@@ -25,10 +25,11 @@ def client_left(client, server):
 
 # Called when a client sends a message
 def message_received(client, server, message):
+    print("Client(%d) said: %s..." % (client['id'], message[0:100]))
     if(message[0:6] == "!echo "):
         server.send_message(client, message[6:])
     elif(message == "!submission"):
-        server.send_message(client, str(this_file_group_binary_data))
+        server.send_message(client, this_file_group_binary_data)
     else:
         if(checkmd5(message).lower() == checkmd5(this_file_group_binary_data).lower()):
             server.send_message(client, "1")
